@@ -1,0 +1,3 @@
+id_mascota,nombre,especie,raza,edad_años,peso_kg,fecha_consulta,dueño_nombre,dueño_email,motivo_consulta,costo_consulta,val_id,val_especie,val_peso,val_fecha,rango_peso,val_semantica,val_fecha_futura,registro_valido
+6,,nan,,,,,,,,,True,False,False,False,Normal,True,False,False
+33,,nan,Doméstico,3.0,4.5,2024-04-15,Luis Espinoza,sin_nombre@mail.cl,Vacunación,18000.0,True,False,True,True,Normal,True,True,False

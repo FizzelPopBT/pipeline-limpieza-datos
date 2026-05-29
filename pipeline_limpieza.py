@@ -10,92 +10,287 @@ logging.basicConfig(
     encoding='utf-8'
 )
 
+def validar_estructura(df):
+
+    logging.info("=== VALIDACIONES ESTRUCTURALES ===")
+
+    df['val_id'] = df['id_mascota'].notna()
+
+    especies_validas = ['perro', 'gato', 'conejo', 'pez', 'loro']
+
+    df['especie'] = (
+        df['especie']
+        .astype(str)
+        .str.strip()
+        .str.lower()
+    )
+
+    df['especie'] = df['especie'].replace({
+        'cat': 'gato',
+        'gata': 'gato',
+        'perra': 'perro'
+    })
+
+    df['val_especie'] = df['especie'].isin(especies_validas)
+
+    df['val_peso'] = df['peso_kg'].between(0.05, 120)
+
+    df['fecha_consulta'] = pd.to_datetime(
+        df['fecha_consulta'],
+        errors='coerce',
+        format='mixed'
+    )
+
+    df['val_fecha'] = df['fecha_consulta'].notna()
+
+    logging.info(
+        f"Validación estructura completada | "
+        f"id válidos={df['val_id'].sum()} | "
+        f"especie válidas={df['val_especie'].sum()} | "
+        f"peso válidos={df['val_peso'].sum()} | "
+        f"fecha válidas={df['val_fecha'].sum()}"
+    )
+
+    return df
+
+def clasificar_peso(row):
+
+    esp = row['especie']
+    peso = row['peso_kg']
+
+    if esp == 'gato':
+        if peso < 3:
+            return 'Bajo'
+        elif peso <= 5.5:
+            return 'Normal'
+        elif peso <= 6:
+            return 'Alto'
+        else:
+            return 'Obeso'
+
+    elif esp == 'perro':
+        if peso < 5:
+            return 'Bajo'
+        elif peso <= 25:
+            return 'Normal'
+        elif peso <= 30:
+            return 'Alto'
+        else:
+            return 'Obeso'
+
+    return 'Normal'
+
+
+def validar_semantica(df):
+
+    logging.info("=== VALIDACIONES SEMÁNTICAS ===")
+
+    df['rango_peso'] = df.apply(clasificar_peso, axis=1)
+
+    df['val_semantica'] = True
+
+    df.loc[
+        (df['rango_peso'] == 'Obeso') &
+        (df['especie'] == 'perro') &
+        (df['peso_kg'] <= 30),
+        'val_semantica'
+    ] = False
+
+    df.loc[
+        (df['rango_peso'] == 'Obeso') &
+        (df['especie'] == 'gato') &
+        (df['peso_kg'] <= 6),
+        'val_semantica'
+    ] = False
+
+
+    df['val_fecha_futura'] = (
+        df['fecha_consulta'] <= pd.Timestamp.today()
+    )
+
+    logging.info(
+        f"Validación semántica completada | "
+        f"semántica válidas={df['val_semantica'].sum()} | "
+        f"fechas válidas={df['val_fecha_futura'].sum()}"
+    )
+
+    return df
+
+
+def limpiar_datos(df):
+
+    logging.info("=== LIMPIEZA DE DATOS ===")
+
+    registros_antes = len(df)
+
+    df = df.dropna(how='all')
+
+    logging.info(
+        f"Filas vacías eliminadas: "
+        f"{registros_antes - len(df)}"
+    )
+
+    antes_dup = len(df)
+
+    df = df.drop_duplicates(
+        subset=['id_mascota'],
+        keep='first'
+    )
+
+    logging.info(
+        f"Duplicados eliminados: "
+        f"{antes_dup - len(df)}"
+    )
+
+    df.loc[df['edad_años'] < 0, 'edad_años'] = np.nan
+
+    medianas_edad = (
+        df.groupby('especie')['edad_años']
+        .transform('median')
+    )
+
+    df['edad_años'] = df['edad_años'].fillna(medianas_edad)
+
+    logging.info("Edad imputada con medianas.")
+
+    condicion_outlier = (
+        ((df['especie'] == 'gato') & (df['peso_kg'] > 15)) |
+        ((df['especie'] == 'perro') & (df['peso_kg'] > 100))
+    )
+
+    outliers = df[condicion_outlier].shape[0]
+
+    medianas_peso = (
+        df.groupby('especie')['peso_kg']
+        .transform('median')
+    )
+
+    df.loc[condicion_outlier, 'peso_kg'] = np.nan
+
+    df['peso_kg'] = df['peso_kg'].fillna(medianas_peso)
+
+    logging.info(f"Outliers corregidos: {outliers}")
+
+    return df
+
+
+def exportar_resultados(validos, invalidos):
+
+    os.makedirs("data/processed", exist_ok=True)
+
+    ruta_validos = "data/processed/mascotas_validas.csv"
+    ruta_invalidos = "data/processed/mascotas_invalidas.csv"
+
+    validos.to_csv(
+        ruta_validos,
+        index=False,
+        encoding='utf-8'
+    )
+
+    invalidos.to_csv(
+        ruta_invalidos,
+        index=False,
+        encoding='utf-8'
+    )
+
+    logging.info(f"Archivo válidos guardado: {ruta_validos}")
+    logging.info(f"Archivo inválidos guardado: {ruta_invalidos}")
+
 def ejecutar_pipeline():
-    logging.info("=== INICIO DEL PIPELINE DE LIMPIEZA Y TRANSFORMACIÓN ===")
+
+    logging.info("=== INICIO PIPELINE ===")
 
     ruta_raw = "mascotas.csv"
+
     if not os.path.exists(ruta_raw):
-        print(f"Error: No se encontró el archivo '{ruta_raw}' en el directorio actual.")
+
+        print(f"Error: No se encontró '{ruta_raw}'")
+
         logging.error(f"Archivo no encontrado: {ruta_raw}")
+
         return
 
     df = pd.read_csv(ruta_raw)
+
     registros_iniciales = len(df)
-    logging.info(f"Dataset cargado correctamente. Registros iniciales: {registros_iniciales}")
-    print(f"-> Registros iniciales: {registros_iniciales}")
 
-    df = df.dropna(how='all')
-    vacios_eliminados = registros_iniciales - len(df)
-    logging.info(f"Registros completamente vacíos eliminados: {vacios_eliminados}")
+    print(f"Registros iniciales: {registros_iniciales}")
 
-    antes_dup = len(df)
-    df = df.drop_duplicates(subset=['id_mascota'], keep='first')
-    duplicados_eliminados = antes_dup - len(df)
-    logging.info(f"Registros duplicados eliminados (por id_mascota): {duplicados_eliminados}")
+    logging.info(
+        f"Dataset cargado correctamente | "
+        f"registros={registros_iniciales}"
+    )
 
-    df['especie'] = df['especie'].astype(str).str.strip().str.lower()
-    df['especie'] = df['especie'].replace({'cat': 'gato', 'gata': 'gato', 'perra': 'perro'})
-    logging.info("Columna 'especie' homogeneizada a formatos estandarizados ('gato' o 'perro').")
+    df = limpiar_datos(df)
 
-    df.loc[df['edad_años'] < 0, 'edad_años'] = np.nan
-    
-    medianas_edad = df.groupby('especie')['edad_años'].transform('median')
-    nulos_edad_antes = df['edad_años'].isnull().sum()
-    df['edad_años'] = df['edad_años'].fillna(medianas_edad)
-    logging.info(f"Valores nulos o inválidos de 'edad_años' imputados con la mediana: {nulos_edad_antes}")
+    df = validar_estructura(df)
 
-    condicion_outlier = ((df['especie'] == 'gato') & (df['peso_kg'] > 15)) | \
-                        ((df['especie'] == 'perro') & (df['peso_kg'] > 100))
-    
-    outliers_peso = df[condicion_outlier].shape[0]
-    medianas_peso = df.groupby('especie')['peso_kg'].transform('median')
-    df.loc[condicion_outlier, 'peso_kg'] = np.nan
-    df['peso_kg'] = df['peso_kg'].fillna(medianas_peso)
-    logging.info(f"Outliers extremos de 'peso_kg' corregidos e imputados: {outliers_peso}")
+    df = validar_semantica(df)
 
-    df['fecha_consulta'] = pd.to_datetime(df['fecha_consulta'], errors='coerce', format='mixed')
-    logging.info("Formatos de 'fecha_consulta' unificados al estándar internacional YYYY-MM-DD.")
+    df['registro_valido'] = (
 
-    def clasificar_peso(row):
-        esp = row['especie']
-        peso = row['peso_kg']
-        if esp == 'gato':
-            if peso < 3.0: return 'Bajo'
-            elif peso <= 5.5: return 'Normal'
-            else: return 'Alto'
-        elif esp == 'perro':
-            if peso < 5.0: return 'Bajo'
-            elif peso <= 25.0: return 'Normal'
-            elif peso <= 45.0: return 'Alto'
-            else: return 'Obeso'
-        return 'Normal'
+        df['val_id'] &
+        df['val_especie'] &
+        df['val_peso'] &
+        df['val_fecha'] &
+        df['val_semantica'] &
+        df['val_fecha_futura']
+    )
 
-    df['rango_peso'] = df.apply(clasificar_peso, axis=1)
-    logging.info("Nueva columna derivada 'rango_peso' creada con éxito.")
+    validos = df[df['registro_valido']]
 
-    df['consulta_año'] = df['fecha_consulta'].dt.year
-    df['consulta_mes'] = df['fecha_consulta'].dt.month
-    logging.info("Columnas temporales 'consulta_año' y 'consulta_mes' añadidas.")
+    invalidos = df[~df['registro_valido']]
 
-    df_encoded = pd.get_dummies(df, columns=['especie'], prefix='esp', drop_first=False)
-    logging.info("One-Hot Encoding aplicado sobre la variable categórica 'especie'.")
+    validos['consulta_año'] = (
+        validos['fecha_consulta'].dt.year
+    )
 
-    os.makedirs("data/processed", exist_ok=True)
-    
-    ruta_salida = "data/processed/mascotas_clean.csv"
-    df_encoded.to_csv(ruta_salida, index=False, encoding='utf-8')
-    
-    registros_finales = len(df_encoded)
-    logging.info(f"Dataset procesado guardado con éxito en: {ruta_salida}")
-    logging.info(f"Registros finales procesados: {registros_finales}")
-    logging.info("=== FIN DEL PIPELINE CON ÉXITO ===")
+    validos['consulta_mes'] = (
+        validos['fecha_consulta'].dt.month
+    )
 
-    print("\n==========================================")
-    print("¡Proceso completado con éxito!")
-    print(f"-> Archivo guardado en: {ruta_salida}")
-    print(f"-> Registros eliminados en total: {registros_iniciales - registros_finales}")
-    print(f"-> Revisa el historial técnico generado en: 'pipeline.log'")
-    print("==========================================\n")
+    validos = pd.get_dummies(
+        validos,
+        columns=['especie'],
+        prefix='esp',
+        drop_first=False
+    )
+
+    exportar_resultados(validos, invalidos)
+
+    porcentaje_validos = (
+        len(validos) / len(df)
+    ) * 100
+
+    logging.info(
+        f"Registros válidos: {len(validos)}"
+    )
+
+    logging.info(
+        f"Registros inválidos: {len(invalidos)}"
+    )
+
+    logging.info(
+        f"Porcentaje válidos: {porcentaje_validos:.2f}%"
+    )
+
+    logging.info("=== FIN PIPELINE ===")
+
+    print("\n====================================")
+    print("PIPELINE COMPLETADO")
+    print("====================================")
+    print(f"Registros totales: {len(df)}")
+    print(f"Registros válidos: {len(validos)}")
+    print(f"Registros inválidos: {len(invalidos)}")
+    print(f"% válidos: {porcentaje_validos:.2f}%")
+    print("Archivo válidos:")
+    print("data/processed/mascotas_validas.csv")
+    print("Archivo inválidos:")
+    print("data/processed/mascotas_invalidas.csv")
+    print("Logs:")
+    print("pipeline.log")
+    print("====================================\n")
+
 
 if __name__ == "__main__":
     ejecutar_pipeline()
